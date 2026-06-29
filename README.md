@@ -1,1 +1,181 @@
-# Dapoer
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Manajer Pesanan</title>
+    <script src="https://unpkg.com/react@17/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    </style>
+</head>
+<body class="bg-blue-50 text-blue-900 pb-20">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // Fungsi Format Rupiah
+        const formatRp = (angka) => {
+            return new Intl.NumberFormat('id-ID', {
+                style: 'currency',
+                currency: 'IDR',
+                minimumFractionDigits: 0
+            }).format(angka || 0);
+        };
+
+        function App() {
+            const [tab, setTab] = useState('dashboard');
+            const [modalAwal, setModalAwal] = useState(() => Number(localStorage.getItem('modalAwal')) || 0);
+            const [menus, setMenus] = useState(() => JSON.parse(localStorage.getItem('menus')) || []);
+            const [pesanan, setPesanan] = useState(() => JSON.parse(localStorage.getItem('pesanan')) || []);
+            const [pengeluaran, setPengeluaran] = useState(() => JSON.parse(localStorage.getItem('pengeluaran')) || []);
+
+            // Simpan data otomatis ke HP
+            useEffect(() => { localStorage.setItem('modalAwal', modalAwal); }, [modalAwal]);
+            useEffect(() => { localStorage.setItem('menus', JSON.stringify(menus)); }, [menus]);
+            useEffect(() => { localStorage.setItem('pesanan', JSON.stringify(pesanan)); }, [pesanan]);
+            useEffect(() => { localStorage.setItem('pengeluaran', JSON.stringify(pengeluaran)); }, [pengeluaran]);
+
+            // Kalkulasi Keuangan
+            const totalPemasukan = pesanan.reduce((sum, order) => sum + order.total, 0);
+            const totalPengeluaran = pengeluaran.reduce((sum, out) => sum + out.nominal, 0);
+            
+            // Keuntungan = Pemasukan - (Total Harga Modal Barang Terjual + Pengeluaran Tambahan)
+            const totalModalBarangTerjual = pesanan.reduce((sum, order) => sum + order.totalModal, 0);
+            const keuntungan = totalPemasukan - (totalModalBarangTerjual + totalPengeluaran);
+            const kasSaatIni = modalAwal + totalPemasukan - totalPengeluaran;
+
+            // Form State
+            const [formMenu, setFormMenu] = useState({ nama: '', hargaModal: '', hargaJual: '', stok: '' });
+            const [formKeluar, setFormKeluar] = useState({ deskripsi: '', nominal: '' });
+
+            const tambahMenu = (e) => {
+                e.preventDefault();
+                setMenus([...menus, { id: Date.now(), ...formMenu, stok: Number(formMenu.stok), hargaModal: Number(formMenu.hargaModal), hargaJual: Number(formMenu.hargaJual) }]);
+                setFormMenu({ nama: '', hargaModal: '', hargaJual: '', stok: '' });
+            };
+
+            const tambahPengeluaran = (e) => {
+                e.preventDefault();
+                setPengeluaran([...pengeluaran, { id: Date.now(), deskripsi: formKeluar.deskripsi, nominal: Number(formKeluar.nominal) }]);
+                setFormKeluar({ deskripsi: '', nominal: '' });
+            };
+
+            const buatPesanan = (menuId) => {
+                const menu = menus.find(m => m.id === menuId);
+                if (menu.stok > 0) {
+                    // Kurangi stok
+                    setMenus(menus.map(m => m.id === menuId ? { ...m, stok: m.stok - 1 } : m));
+                    // Tambah pesanan
+                    setPesanan([...pesanan, { id: Date.now(), nama: menu.nama, total: menu.hargaJual, totalModal: menu.hargaModal, waktu: new Date().toLocaleTimeString() }]);
+                    alert(`Pesanan ${menu.nama} berhasil dicatat!`);
+                } else {
+                    alert('Stok Habis!');
+                }
+            };
+
+            return (
+                <div class="max-w-md mx-auto p-4">
+                    <h1 class="text-2xl font-bold text-blue-800 text-center mb-6">OrderKu</h1>
+
+                    {/* DASHBOARD */}
+                    {tab === 'dashboard' && (
+                        <div class="space-y-4">
+                            <div class="bg-blue-100 p-4 rounded-xl shadow-sm border border-blue-200">
+                                <label class="text-sm font-semibold text-blue-600">Modal Awal</label>
+                                <input type="number" class="w-full mt-1 p-2 rounded-lg border-blue-300 focus:ring-blue-500 bg-white" 
+                                    value={modalAwal} onChange={(e) => setModalAwal(Number(e.target.value))} placeholder="Masukkan modal awal..." />
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-4">
+                                <div class="bg-white p-4 rounded-xl shadow-sm border border-blue-100">
+                                    <p class="text-xs text-blue-500 font-bold">Pemasukan</p>
+                                    <p class="text-lg font-bold text-green-600">{formatRp(totalPemasukan)}</p>
+                                </div>
+                                <div class="bg-white p-4 rounded-xl shadow-sm border border-blue-100">
+                                    <p class="text-xs text-blue-500 font-bold">Pengeluaran</p>
+                                    <p class="text-lg font-bold text-red-500">{formatRp(totalPengeluaran)}</p>
+                                </div>
+                                <div class="bg-blue-600 p-4 rounded-xl shadow-sm col-span-2 text-white">
+                                    <p class="text-sm font-medium opacity-80">Keuntungan Bersih</p>
+                                    <p class="text-3xl font-bold">{formatRp(keuntungan)}</p>
+                                    <p class="text-xs mt-2 opacity-90">Kas Saat Ini: {formatRp(kasSaatIni)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* STOK & MENU */}
+                    {tab === 'menu' && (
+                        <div>
+                            <form onSubmit={tambahMenu} class="bg-white p-4 rounded-xl shadow-sm mb-6 border border-blue-100">
+                                <h3 class="font-bold text-blue-800 mb-3">Tambah Menu Baru</h3>
+                                <input required type="text" placeholder="Nama Menu" class="w-full mb-2 p-2 rounded-lg bg-blue-50 border-0" value={formMenu.nama} onChange={e => setFormMenu({...formMenu, nama: e.target.value})} />
+                                <input required type="number" placeholder="Harga Modal (Rp)" class="w-full mb-2 p-2 rounded-lg bg-blue-50 border-0" value={formMenu.hargaModal} onChange={e => setFormMenu({...formMenu, hargaModal: e.target.value})} />
+                                <input required type="number" placeholder="Harga Jual (Rp)" class="w-full mb-2 p-2 rounded-lg bg-blue-50 border-0" value={formMenu.hargaJual} onChange={e => setFormMenu({...formMenu, hargaJual: e.target.value})} />
+                                <input required type="number" placeholder="Jumlah Stok Awal" class="w-full mb-4 p-2 rounded-lg bg-blue-50 border-0" value={formMenu.stok} onChange={e => setFormMenu({...formMenu, stok: e.target.value})} />
+                                <button type="submit" class="w-full bg-blue-500 text-white font-bold py-2 rounded-lg">Simpan Menu</button>
+                            </form>
+
+                            <h3 class="font-bold text-blue-800 mb-2">Daftar Menu & Stok</h3>
+                            {menus.map(m => (
+                                <div key={m.id} class="bg-white p-4 rounded-xl mb-3 flex justify-between items-center shadow-sm border border-blue-100">
+                                    <div>
+                                        <p class="font-bold">{m.nama}</p>
+                                        <p class="text-xs text-gray-500">Jual: {formatRp(m.hargaJual)} | Modal: {formatRp(m.hargaModal)}</p>
+                                    </div>
+                                    <div class="text-center">
+                                        <span class={`text-sm font-bold px-3 py-1 rounded-full ${m.stok > 0 ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>Sisa: {m.stok}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {/* KASIR / PESANAN */}
+                    {tab === 'kasir' && (
+                        <div>
+                            <h3 class="font-bold text-blue-800 mb-4">Kasir / Buat Pesanan</h3>
+                            <div class="grid grid-cols-2 gap-3">
+                                {menus.map(m => (
+                                    <button key={m.id} onClick={() => buatPesanan(m.id)} class="bg-white p-4 rounded-xl shadow-sm border border-blue-100 text-left active:bg-blue-50">
+                                        <p class="font-bold text-blue-900">{m.nama}</p>
+                                        <p class="text-sm text-blue-600 font-semibold mt-1">{formatRp(m.hargaJual)}</p>
+                                        <p class="text-xs text-gray-400 mt-2">Stok: {m.stok}</p>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* PENGELUARAN */}
+                    {tab === 'pengeluaran' && (
+                        <div>
+                            <form onSubmit={tambahPengeluaran} class="bg-white p-4 rounded-xl shadow-sm mb-6 border border-blue-100">
+                                <h3 class="font-bold text-blue-800 mb-3">Catat Pengeluaran</h3>
+                                <input required type="text" placeholder="Untuk apa? (Beli gas, dll)" class="w-full mb-2 p-2 rounded-lg bg-blue-50 border-0" value={formKeluar.deskripsi} onChange={e => setFormKeluar({...formKeluar, deskripsi: e.target.value})} />
+                                <input required type="number" placeholder="Nominal (Rp)" class="w-full mb-4 p-2 rounded-lg bg-blue-50 border-0" value={formKeluar.nominal} onChange={e => setFormKeluar({...formKeluar, nominal: e.target.value})} />
+                                <button type="submit" class="w-full bg-red-400 text-white font-bold py-2 rounded-lg">Simpan Pengeluaran</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {/* BOTTOM NAVIGATION */}
+                    <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-blue-100 p-3 flex justify-around text-xs shadow-lg max-w-md mx-auto">
+                        <button onClick={() => setTab('dashboard')} class={`flex flex-col items-center ${tab==='dashboard' ? 'text-blue-600 font-bold' : 'text-gray-400'}`}><span>📊</span>Dashboard</button>
+                        <button onClick={() => setTab('menu')} class={`flex flex-col items-center ${tab==='menu' ? 'text-blue-600 font-bold' : 'text-gray-400'}`}><span>📦</span>Stok</button>
+                        <button onClick={() => setTab('kasir')} class={`flex flex-col items-center ${tab==='kasir' ? 'text-blue-600 font-bold' : 'text-gray-400'}`}><span>🛒</span>Kasir</button>
+                        <button onClick={() => setTab('pengeluaran')} class={`flex flex-col items-center ${tab==='pengeluaran' ? 'text-blue-600 font-bold' : 'text-gray-400'}`}><span>💸</span>Keluar</button>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
