@@ -1,669 +1,937 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Home, 
-  ShoppingBag, 
-  BookOpen, 
-  DollarSign, 
-  Plus, 
-  Edit2, 
-  Trash2, 
-  X, 
-  ChevronRight,
-  Save,
-  CheckCircle2,
-  PackageSearch,
-  Sparkles,
-  Loader2
-} from 'lucide-react';
-
-// --- CUSTOM HOOK FOR LOCAL STORAGE ---
-function useLocalStorage(key, initialValue) {
-  const [storedValue, setStoredValue] = useState(() => {
-    try {
-      const item = window.localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      console.error(error);
-      return initialValue;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(key, JSON.stringify(storedValue));
-    } catch (error) {
-      console.error(error);
-    }
-  }, [key, storedValue]);
-
-  return [storedValue, setStoredValue];
-}
-
-// --- UTILS ---
-const formatRp = (amount) => {
-  return new Intl.NumberFormat('id-ID', {
-    style: 'currency',
-    currency: 'IDR',
-    minimumFractionDigits: 0
-  }).format(amount || 0);
-};
-
-// --- GEMINI API SETUP ---
-const apiKey = ""; // Disediakan oleh environment eksekusi
-
-const fetchGeminiWithRetry = async (prompt, retries = 5) => {
-  const delays = [1000, 2000, 4000, 8000, 16000];
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-  
-  for (let i = 0; i < retries; i++) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          systemInstruction: { parts: [{ text: "Kamu adalah asisten bisnis profesional dan kreatif untuk UMKM kuliner di Indonesia. Berikan respon menggunakan format markdown." }] }
-        })
-      });
-      
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      
-      const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || "Tidak ada respon dari AI.";
-    } catch (error) {
-      if (i === retries - 1) throw error;
-      await new Promise(res => setTimeout(res, delays[i]));
-    }
-  }
-};
-
-export default function App() {
-  const [activeTab, setActiveTab] = useState('home');
-
-  // --- STATE MANAGEMENT ---
-  const [modalAwal, setModalAwal] = useLocalStorage('app_modalAwal', 251000);
-  const [menus, setMenus] = useLocalStorage('app_menus', [
-    { id: 1, name: 'Piscok', price: 10000, stock: 50, type: 'main' },
-    { id: 2, name: 'Pisang Nugget', price: 15000, stock: 30, type: 'main' },
-  ]);
-  const [toppings, setToppings] = useLocalStorage('app_toppings', [
-    { id: 1, name: 'Tiramisu', price: 3000, stock: 20, type: 'topping' },
-    { id: 2, name: 'Oreo', price: 2000, stock: 25, type: 'topping' },
-    { id: 3, name: 'Red Velvet', price: 4000, stock: 15, type: 'topping' },
-  ]);
-  const [orders, setOrders] = useLocalStorage('app_orders', []);
-  const [expenses, setExpenses] = useLocalStorage('app_expenses', []);
-
-  // --- MODAL STATES ---
-  const [isMenuModalOpen, setIsMenuModalOpen] = useState(false);
-  const [editingItem, setEditingItem] = useState(null);
-  
-  const [isOrderModalOpen, setIsOrderModalOpen] = useState(false);
-  
-  const [isCapitalModalOpen, setIsCapitalModalOpen] = useState(false);
-  const [capitalInput, setCapitalInput] = useState('');
-
-  // --- AI ASSISTANT STATES ---
-  const [isAIModalOpen, setIsAIModalOpen] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiResponse, setAiResponse] = useState('');
-
-  // --- ORDER FORM STATES (Dipindah ke top-level agar tidak melanggar Rules of Hooks) ---
-  const [customerName, setCustomerName] = useState('');
-  const [selectedMenuId, setSelectedMenuId] = useState('');
-  const [selectedToppingIds, setSelectedToppingIds] = useState([]);
-  const [orderQty, setOrderQty] = useState(1);
-
-  // --- CALCULATIONS ---
-  const totalIncome = orders.reduce((sum, order) => sum + order.total, 0);
-  const totalExpense = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-  const netProfit = totalIncome - totalExpense;
-
-  // --- COMPONENTS ---
-
-  // 1. DASHBOARD TAB
-  const renderDashboard = () => (
-    <div className="p-5 space-y-6 animate-in fade-in zoom-in-95 duration-200">
-      <div className="flex justify-between items-center mb-2">
-        <h1 className="text-2xl font-bold text-slate-800">Ringkasan</h1>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        {/* Modal Awal */}
-        <div 
-          onClick={() => { setCapitalInput(modalAwal); setIsCapitalModalOpen(true); }}
-          className="col-span-2 bg-gradient-to-br from-sky-400 to-blue-500 rounded-2xl p-5 text-white shadow-lg shadow-sky-200 active:scale-95 transition-transform cursor-pointer relative overflow-hidden"
-        >
-          <div className="relative z-10">
-            <p className="text-sky-100 text-sm font-medium mb-1">Modal Awal (Tap Edit)</p>
-            <h2 className="text-3xl font-bold">{formatRp(modalAwal)}</h2>
-          </div>
-          <div className="absolute -bottom-4 -right-4 opacity-20">
-            <DollarSign size={100} />
-          </div>
-        </div>
-
-        {/* Pemasukan */}
-        <div className="bg-white rounded-2xl p-4 border border-sky-50 shadow-sm">
-          <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Pemasukan</p>
-          <h3 className="text-lg font-bold text-emerald-600">{formatRp(totalIncome)}</h3>
-        </div>
-
-        {/* Pengeluaran */}
-        <div className="bg-white rounded-2xl p-4 border border-sky-50 shadow-sm">
-          <p className="text-slate-500 text-xs font-semibold uppercase tracking-wider mb-1">Pengeluaran</p>
-          <h3 className="text-lg font-bold text-rose-500">{formatRp(totalExpense)}</h3>
-        </div>
-
-        {/* Keuntungan */}
-        <div className="col-span-2 bg-sky-50 rounded-2xl p-4 border border-sky-100 flex items-center justify-between">
-          <div>
-            <p className="text-sky-600/80 text-sm font-semibold mb-1">Keuntungan Bersih</p>
-            <h3 className="text-2xl font-bold text-sky-700">{formatRp(netProfit)}</h3>
-          </div>
-          <div className="bg-white p-3 rounded-xl shadow-sm">
-            <PackageSearch className="text-sky-500" />
-          </div>
-        </div>
-      </div>
-
-      {/* ✨ AI Assistant Card ✨ */}
-      <div 
-        onClick={() => setIsAIModalOpen(true)}
-        className="mt-6 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-2xl p-5 text-white shadow-lg shadow-indigo-200 cursor-pointer active:scale-95 transition-transform flex items-center justify-between"
-      >
-        <div>
-          <h3 className="font-bold text-lg flex items-center gap-2">
-            <Sparkles size={20} className="text-yellow-300" /> Asisten Bisnis AI
-          </h3>
-          <p className="text-indigo-100 text-sm mt-1">Dapatkan insight & ide promo otomatis!</p>
-        </div>
-        <ChevronRight className="text-indigo-200" />
-      </div>
-    </div>
-  );
-
-  // 2. MENU & STOCK TAB
-  const renderMenuStock = () => {
-    const handleSaveMenu = (e) => {
-      e.preventDefault();
-      const form = e.target;
-      const type = form.type.value;
-      const newItem = {
-        id: editingItem?.id || Date.now(),
-        name: form.name.value,
-        price: parseInt(form.price.value),
-        stock: parseInt(form.stock.value),
-        type
-      };
-
-      if (type === 'main') {
-        if (editingItem) {
-          setMenus(menus.map(m => m.id === editingItem.id ? newItem : m));
-        } else {
-          setMenus([...menus, newItem]);
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dapoer Cipais</title>
+    <!-- Tailwind CSS untuk Styling UI/UX yang Aesthetic -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Phosphor Icons untuk Ikon yang modern -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <style>
+        /* Sembunyikan scrollbar tapi tetap bisa scroll */
+        ::-webkit-scrollbar { display: none; }
+        body { -ms-overflow-style: none; scrollbar-width: none; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        /* Animasi masuk dari bawah */
+        .slide-up { animation: slideUp 0.3s ease-out forwards; }
+        @keyframes slideUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
         }
-      } else {
-        if (editingItem) {
-          setToppings(toppings.map(t => t.id === editingItem.id ? newItem : t));
-        } else {
-          setToppings([...toppings, newItem]);
+        .fade-in { animation: fadeIn 0.2s ease-out forwards; }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
         }
-      }
-      setIsMenuModalOpen(false);
-      setEditingItem(null);
-    };
+    </style>
+</head>
+<body class="bg-blue-50 text-slate-800 antialiased selection:bg-blue-200">
 
-    const handleDeleteItem = (id, type) => {
-      if(window.confirm('Yakin ingin menghapus item ini?')) {
-        if (type === 'main') setMenus(menus.filter(m => m.id !== id));
-        else setToppings(toppings.filter(t => t.id !== id));
-      }
-    };
-
-    // Dijadikan fungsi render biasa agar tidak mengalami isu unmount/re-mount internal komponen
-    const renderItemCard = (item) => (
-      <div key={`${item.type}-${item.id}`} className="bg-white p-4 rounded-2xl border border-sky-50 shadow-sm flex justify-between items-center mb-3">
-        <div>
-          <h4 className="font-bold text-slate-800">{item.name}</h4>
-          <p className="text-sky-500 font-semibold text-sm">{formatRp(item.price)}</p>
-          <span className={`inline-block mt-2 text-xs px-2 py-1 rounded-md font-medium ${item.stock > 5 ? 'bg-sky-50 text-sky-600' : 'bg-rose-50 text-rose-600'}`}>
-            Sisa Stok: {item.stock}
-          </span>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={() => { setEditingItem(item); setIsMenuModalOpen(true); }} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-sky-50 hover:text-sky-500 transition-colors">
-            <Edit2 size={18} />
-          </button>
-          <button onClick={() => handleDeleteItem(item.id, item.type)} className="p-2 bg-slate-50 text-slate-500 rounded-xl hover:bg-rose-50 hover:text-rose-500 transition-colors">
-            <Trash2 size={18} />
-          </button>
-        </div>
-      </div>
-    );
-
-    return (
-      <div className="p-5 pb-24 animate-in fade-in duration-200">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold text-slate-800">Menu & Stok</h1>
-          <button 
-            onClick={() => { setEditingItem(null); setIsMenuModalOpen(true); }}
-            className="bg-sky-500 text-white p-2 rounded-xl shadow-md shadow-sky-200 active:scale-95"
-          >
-            <Plus size={24} />
-          </button>
-        </div>
-
-        <h3 className="font-semibold text-slate-500 mb-3 text-sm uppercase tracking-wider">Menu Utama</h3>
-        {menus.length === 0 ? <p className="text-slate-400 text-sm mb-6">Belum ada menu.</p> : menus.map(m => renderItemCard(m))}
-
-        <h3 className="font-semibold text-slate-500 mt-8 mb-3 text-sm uppercase tracking-wider">Topping Tambahan</h3>
-        {toppings.length === 0 ? <p className="text-slate-400 text-sm">Belum ada topping.</p> : toppings.map(t => renderItemCard(t))}
-
-        {/* Modal Tambah/Edit Menu */}
-        {isMenuModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-              <div className="p-5 border-b border-slate-100 flex justify-between items-center">
-                <h3 className="font-bold text-lg text-slate-800">{editingItem ? 'Edit Item' : 'Tambah Baru'}</h3>
-                <button onClick={() => setIsMenuModalOpen(false)} className="text-slate-400 p-1"><X size={20}/></button>
-              </div>
-              <form onSubmit={handleSaveMenu} className="p-5 space-y-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Jenis Item</label>
-                  <select name="type" defaultValue={editingItem?.type || 'main'} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500">
-                    <option value="main">Menu Utama</option>
-                    <option value="topping">Topping</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Nama</label>
-                  <input required name="name" defaultValue={editingItem?.name} type="text" placeholder="Mis: Piscok" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500" />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">Harga (Rp)</label>
-                    <input required name="price" defaultValue={editingItem?.price} type="number" placeholder="10000" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">Stok</label>
-                    <input required name="stock" defaultValue={editingItem?.stock} type="number" placeholder="50" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500" />
-                  </div>
-                </div>
-                <button type="submit" className="w-full bg-sky-500 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-sky-200 mt-4 active:scale-95 transition-transform flex items-center justify-center gap-2">
-                  <Save size={18} /> Simpan
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // 3. ORDERS TAB (PESANAN)
-  const renderOrders = () => {
-    const handleSaveOrder = (e) => {
-      e.preventDefault();
-      if (!selectedMenuId) return alert('Pilih menu utama!');
-      
-      const menu = menus.find(m => m.id === parseInt(selectedMenuId));
-      if(menu.stock < orderQty) return alert(`Stok ${menu.name} tidak cukup! Sisa: ${menu.stock}`);
-
-      const selectedToppingsList = selectedToppingIds.map(id => toppings.find(t => t.id === parseInt(id)));
-      
-      // Cek stok topping
-      for(let top of selectedToppingsList) {
-         if(top.stock < orderQty) return alert(`Stok topping ${top.name} tidak cukup! Sisa: ${top.stock}`);
-      }
-
-      const toppingsPrice = selectedToppingsList.reduce((sum, t) => sum + t.price, 0);
-      const total = (menu.price + toppingsPrice) * orderQty;
-
-      const newOrder = {
-        id: Date.now(),
-        customerName: customerName || 'Pelanggan',
-        date: new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
-        menu,
-        toppings: selectedToppingsList,
-        qty: orderQty,
-        total
-      };
-
-      // Potong Stok
-      setMenus(menus.map(m => m.id === menu.id ? { ...m, stock: m.stock - orderQty } : m));
-      const toppingIdsInt = selectedToppingIds.map(id => parseInt(id));
-      setToppings(toppings.map(t => toppingIdsInt.includes(t.id) ? { ...t, stock: t.stock - orderQty } : t));
-
-      setOrders([newOrder, ...orders]);
-      setIsOrderModalOpen(false);
-      
-      // Reset form
-      setCustomerName(''); setSelectedMenuId(''); setSelectedToppingIds([]); setOrderQty(1);
-    };
-
-    const handleDeleteOrder = (order) => {
-      if(window.confirm('Hapus pesanan ini? Stok akan dikembalikan.')) {
-        // Kembalikan stok
-        setMenus(menus.map(m => m.id === order.menu.id ? { ...m, stock: m.stock + order.qty } : m));
-        const toppingIds = order.toppings.map(t => t.id);
-        setToppings(toppings.map(t => toppingIds.includes(t.id) ? { ...t, stock: t.stock + order.qty } : t));
+    <!-- Container Utama (Ukuran max untuk mobile/iPhone layout) -->
+    <div class="max-w-md mx-auto bg-white min-h-screen shadow-xl relative pb-20">
         
-        setOrders(orders.filter(o => o.id !== order.id));
-      }
-    };
+        <!-- Header -->
+        <header class="bg-white p-4 sticky top-0 z-20 shadow-sm border-b border-slate-100 rounded-b-2xl">
+            <div class="flex items-center justify-center">
+                <img src="Asset 5.png" alt="Logo Dapoer Cipais" class="h-12 object-contain drop-shadow-sm">
+            </div>
+        </header>
 
-    return (
-      <div className="p-5 pb-24 animate-in fade-in duration-200">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold text-slate-800">Daftar Pesanan</h1>
-          <button 
-            onClick={() => setIsOrderModalOpen(true)}
-            className="bg-sky-500 text-white px-4 py-2 rounded-xl font-semibold shadow-md shadow-sky-200 active:scale-95 flex items-center gap-2"
-          >
-            <Plus size={20} /> Buat
-          </button>
-        </div>
+        <!-- Wadah Notifikasi (Toast) -->
+        <div id="toast-container" class="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 flex flex-col gap-2 w-11/12 max-w-xs pointer-events-none"></div>
 
-        <div className="space-y-4">
-          {orders.length === 0 ? (
-            <div className="text-center py-10 text-slate-400">Belum ada pesanan hari ini.</div>
-          ) : (
-            orders.map(order => (
-              <div key={order.id} className="bg-white rounded-2xl p-4 shadow-sm border border-sky-50">
-                <div className="flex justify-between items-start mb-3 border-b border-slate-50 pb-3">
-                  <div>
-                    <h3 className="font-bold text-slate-800">{order.customerName}</h3>
-                    <p className="text-xs text-slate-400">{order.date}</p>
-                  </div>
-                  <button onClick={() => handleDeleteOrder(order)} className="text-rose-400 hover:text-rose-600 p-1">
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-                <div className="flex justify-between items-end">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-700">{order.qty}x {order.menu.name}</p>
-                    {order.toppings.length > 0 && (
-                      <p className="text-xs text-sky-500 mt-1">
-                        + Topping: {order.toppings.map(t => t.name).join(', ')}
-                      </p>
-                    )}
-                  </div>
-                  <h4 className="font-bold text-sky-600">{formatRp(order.total)}</h4>
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-
-        {/* Modal Buat Pesanan Baru */}
-        {isOrderModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center sm:p-4">
-            <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in slide-in-from-bottom duration-300 max-h-[90vh] overflow-y-auto">
-              <div className="sticky top-0 bg-white z-10 p-5 border-b border-slate-100 flex justify-between items-center">
-                <h3 className="font-bold text-lg text-slate-800">Pesanan Baru</h3>
-                <button onClick={() => setIsOrderModalOpen(false)} className="bg-slate-100 text-slate-500 rounded-full p-1"><X size={20}/></button>
-              </div>
-              
-              <form onSubmit={handleSaveOrder} className="p-5 space-y-5">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Nama Pemesan</label>
-                  <input value={customerName} onChange={e => setCustomerName(e.target.value)} type="text" placeholder="Mis: Kak Nisa" className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-sky-500 focus:bg-white transition-colors" />
+        <!-- AREA KONTEN (TABS) -->
+        <main class="p-4">
+            
+            <!-- 1. DASHBOARD -->
+            <div id="view-dashboard" class="view-section fade-in">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-slate-700">Ringkasan Keuangan</h2>
                 </div>
                 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Pilih Menu Utama</label>
-                  <div className="space-y-2">
-                    {menus.map(m => (
-                      <label key={m.id} className={`flex items-center justify-between p-3 border rounded-xl cursor-pointer transition-all ${selectedMenuId === String(m.id) ? 'border-sky-500 bg-sky-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
-                        <div className="flex items-center gap-3">
-                          <input type="radio" name="menu" value={m.id} checked={selectedMenuId === String(m.id)} onChange={(e) => setSelectedMenuId(e.target.value)} className="w-4 h-4 text-sky-500 accent-sky-500" disabled={m.stock < 1} />
-                          <span className={`font-medium ${m.stock < 1 ? 'text-slate-400' : 'text-slate-700'}`}>{m.name}</span>
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <!-- Modal Awal -->
+                    <div class="bg-blue-50 p-4 rounded-2xl border border-blue-100 flex flex-col justify-center">
+                        <div class="flex justify-between items-start">
+                            <p class="text-xs text-blue-600 font-semibold mb-1">Modal Awal</p>
+                            <button onclick="openModal('modal-edit-modal')" class="text-blue-500 hover:text-blue-700">
+                                <i class="ph ph-pencil-simple text-lg"></i>
+                            </button>
                         </div>
-                        <div className="text-right">
-                          <span className={`block font-semibold ${m.stock < 1 ? 'text-slate-400' : 'text-sky-600'}`}>{formatRp(m.price)}</span>
-                          <span className="text-[10px] text-slate-400">Sisa: {m.stock}</span>
+                        <h3 id="txt-modal-awal" class="text-lg font-bold text-slate-800 break-words">Rp 0</h3>
+                    </div>
+                    <!-- Keuntungan -->
+                    <div class="bg-emerald-50 p-4 rounded-2xl border border-emerald-100 flex flex-col justify-center">
+                        <p class="text-xs text-emerald-600 font-semibold mb-1">Keuntungan Bersih</p>
+                        <h3 id="txt-keuntungan" class="text-lg font-bold text-emerald-700 break-words">Rp 0</h3>
+                    </div>
+                    <!-- Pemasukan -->
+                    <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                        <div class="flex items-center gap-2 mb-1 text-slate-500">
+                            <i class="ph-fill ph-arrow-circle-down text-blue-500"></i>
+                            <p class="text-xs font-semibold">Pemasukan</p>
                         </div>
-                      </label>
-                    ))}
-                  </div>
+                        <h3 id="txt-pemasukan" class="text-base font-bold text-slate-800 break-words">Rp 0</h3>
+                    </div>
+                    <!-- Pengeluaran -->
+                    <div class="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                        <div class="flex items-center gap-2 mb-1 text-slate-500">
+                            <i class="ph-fill ph-arrow-circle-up text-red-500"></i>
+                            <p class="text-xs font-semibold">Pengeluaran</p>
+                        </div>
+                        <h3 id="txt-pengeluaran" class="text-base font-bold text-slate-800 break-words">Rp 0</h3>
+                    </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Topping (Bisa pilih banyak)</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {toppings.map(t => (
-                      <label key={t.id} className={`flex items-start gap-2 p-3 border rounded-xl cursor-pointer transition-all ${selectedToppingIds.includes(String(t.id)) ? 'border-sky-500 bg-sky-50' : 'border-slate-200 bg-white'}`}>
-                         <input type="checkbox" value={t.id} checked={selectedToppingIds.includes(String(t.id))} onChange={(e) => {
-                            if(e.target.checked) setSelectedToppingIds([...selectedToppingIds, e.target.value]);
-                            else setSelectedToppingIds(selectedToppingIds.filter(id => id !== e.target.value));
-                         }} className="mt-1 w-4 h-4 accent-sky-500 rounded" disabled={t.stock < 1}/>
-                         <div>
-                            <span className={`block font-medium text-sm ${t.stock < 1 ? 'text-slate-400' : 'text-slate-700'}`}>{t.name}</span>
-                            <span className="block text-xs font-semibold text-sky-600">+{formatRp(t.price)}</span>
-                         </div>
-                      </label>
-                    ))}
-                  </div>
+                <!-- Saldo Akhir -->
+                <div class="bg-gradient-to-br from-blue-500 to-blue-600 p-5 rounded-2xl text-white shadow-lg relative overflow-hidden">
+                    <div class="absolute -right-4 -bottom-4 opacity-10">
+                        <i class="ph-fill ph-wallet text-9xl"></i>
+                    </div>
+                    <p class="text-sm font-medium opacity-90 mb-1">Total Saldo Saat Ini</p>
+                    <h3 id="txt-saldo-akhir" class="text-3xl font-bold mb-1">Rp 0</h3>
+                    <p class="text-xs opacity-75">(Modal Awal + Keuntungan)</p>
                 </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-500 mb-1">Jumlah Porsi</label>
-                  <div className="flex items-center gap-4 bg-slate-50 p-2 border border-slate-200 rounded-xl w-max">
-                    <button type="button" onClick={() => setOrderQty(Math.max(1, orderQty - 1))} className="w-10 h-10 bg-white rounded-lg shadow-sm text-slate-600 font-bold text-xl">-</button>
-                    <span className="font-bold w-6 text-center">{orderQty}</span>
-                    <button type="button" onClick={() => setOrderQty(orderQty + 1)} className="w-10 h-10 bg-white rounded-lg shadow-sm text-slate-600 font-bold text-xl">+</button>
-                  </div>
-                </div>
-
-                <button type="submit" className="w-full bg-sky-500 text-white font-bold py-4 rounded-xl shadow-lg shadow-sky-200 mt-6 active:scale-95 transition-transform flex items-center justify-center gap-2">
-                   <CheckCircle2 size={20} /> Simpan Pesanan
-                </button>
-              </form>
             </div>
-          </div>
-        )}
-      </div>
-    );
-  };
 
-  // 4. EXPENSES TAB (PENGELUARAN)
-  const renderExpenses = () => {
-    const handleSaveExpense = (e) => {
-      e.preventDefault();
-      const form = e.target;
-      const newExp = {
-        id: Date.now(),
-        desc: form.desc.value,
-        amount: parseInt(form.amount.value),
-        date: new Date().toLocaleDateString('id-ID')
-      };
-      setExpenses([newExp, ...expenses]);
-      form.reset();
-    };
-
-    return (
-      <div className="p-5 pb-24 animate-in fade-in duration-200">
-        <h1 className="text-2xl font-bold text-slate-800 mb-6">Pengeluaran</h1>
-        
-        <form onSubmit={handleSaveExpense} className="bg-white p-5 rounded-2xl shadow-sm border border-sky-50 mb-6 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1">Keterangan Pengeluaran</label>
-            <input required name="desc" type="text" placeholder="Mis: Beli Minyak Goreng" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-400" />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 mb-1">Nominal (Rp)</label>
-            <input required name="amount" type="number" placeholder="50000" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-rose-400" />
-          </div>
-          <button type="submit" className="w-full bg-rose-500 text-white font-bold py-3.5 rounded-xl shadow-md shadow-rose-200 active:scale-95 transition-transform">
-            Catat Pengeluaran
-          </button>
-        </form>
-
-        <h3 className="font-semibold text-slate-500 mb-3 text-sm uppercase tracking-wider">Riwayat Pengeluaran</h3>
-        <div className="space-y-3">
-          {expenses.length === 0 ? <p className="text-slate-400 text-sm">Belum ada pengeluaran.</p> : expenses.map(exp => (
-            <div key={exp.id} className="bg-white p-4 rounded-xl border border-slate-100 flex justify-between items-center">
-              <div>
-                <h4 className="font-bold text-slate-700">{exp.desc}</h4>
-                <p className="text-xs text-slate-400">{exp.date}</p>
-              </div>
-              <span className="font-bold text-rose-500">- {formatRp(exp.amount)}</span>
+            <!-- 2. PESANAN -->
+            <div id="view-pesanan" class="view-section hidden fade-in">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-slate-700">Daftar Pesanan</h2>
+                    <button onclick="openModal('modal-tambah-pesanan'); initFormPesanan();" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md flex items-center gap-1 transition-colors">
+                        <i class="ph ph-plus-circle text-lg"></i> Buat Pesanan
+                    </button>
+                </div>
+                <div id="list-pesanan" class="flex flex-col gap-3">
+                    <!-- List pesanan di-render disini via JS -->
+                </div>
             </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
 
-  return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-800 selection:bg-sky-200">
-      {/* Mobile Wrapper for Desktop testing - Keeps it looking like an iPhone app */}
-      <div className="max-w-md mx-auto bg-slate-50 min-h-screen relative shadow-2xl sm:border-x border-slate-200 overflow-x-hidden">
-        
-        {/* Main Content Area */}
-        <main className="h-full">
-          {activeTab === 'home' && renderDashboard()}
-          {activeTab === 'menu' && renderMenuStock()}
-          {activeTab === 'order' && renderOrders()}
-          {activeTab === 'expense' && renderExpenses()}
+            <!-- 3. MENU & STOK -->
+            <div id="view-menu" class="view-section hidden fade-in">
+                <!-- Tabs Menu vs Topping -->
+                <div class="flex gap-2 mb-4 bg-slate-100 p-1 rounded-xl">
+                    <button id="tab-menu-utama" onclick="switchSubTab('menu')" class="flex-1 py-2 text-sm font-bold rounded-lg bg-white shadow-sm text-blue-600 transition-all">Menu Utama</button>
+                    <button id="tab-menu-topping" onclick="switchSubTab('topping')" class="flex-1 py-2 text-sm font-bold rounded-lg text-slate-500 transition-all">Topping Tambahan</button>
+                </div>
+
+                <!-- Konten Menu Utama -->
+                <div id="subview-menu" class="block">
+                    <button onclick="openModal('modal-form-menu'); setFormMenuType('menu');" class="w-full bg-blue-50 text-blue-600 border border-dashed border-blue-300 py-3 rounded-xl mb-3 font-semibold hover:bg-blue-100 transition-colors flex justify-center items-center gap-2">
+                        <i class="ph ph-plus"></i> Tambah Menu Baru
+                    </button>
+                    <div id="list-menu" class="flex flex-col gap-3"></div>
+                </div>
+
+                <!-- Konten Topping -->
+                <div id="subview-topping" class="hidden">
+                    <button onclick="openModal('modal-form-menu'); setFormMenuType('topping');" class="w-full bg-blue-50 text-blue-600 border border-dashed border-blue-300 py-3 rounded-xl mb-3 font-semibold hover:bg-blue-100 transition-colors flex justify-center items-center gap-2">
+                        <i class="ph ph-plus"></i> Tambah Topping Baru
+                    </button>
+                    <div id="list-topping" class="flex flex-col gap-3"></div>
+                </div>
+            </div>
+
+            <!-- 4. PENGELUARAN -->
+            <div id="view-pengeluaran" class="view-section hidden fade-in">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-slate-700">Catatan Pengeluaran</h2>
+                    <button onclick="openModal('modal-tambah-pengeluaran')" class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-md flex items-center gap-1 transition-colors">
+                        <i class="ph ph-plus-circle text-lg"></i> Catat
+                    </button>
+                </div>
+                <div id="list-pengeluaran" class="flex flex-col gap-3">
+                    <!-- List pengeluaran di-render disini -->
+                </div>
+            </div>
         </main>
 
-        {/* Modal Awal Editor Modal */}
-        {isCapitalModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl animate-in zoom-in duration-200">
-                <h3 className="font-bold text-lg mb-4 text-center">Set Modal Awal</h3>
-                <input 
-                  type="number" 
-                  value={capitalInput} 
-                  onChange={e => setCapitalInput(e.target.value)} 
-                  className="w-full p-4 text-center text-2xl font-bold bg-slate-50 border border-slate-200 rounded-xl mb-4 outline-none focus:border-sky-500" 
-                  autoFocus
-                />
-                <div className="flex gap-3">
-                  <button onClick={() => setIsCapitalModalOpen(false)} className="flex-1 p-3 bg-slate-100 text-slate-600 rounded-xl font-semibold">Batal</button>
-                  <button onClick={() => { setModalAwal(parseInt(capitalInput) || 0); setIsCapitalModalOpen(false); }} className="flex-1 p-3 bg-sky-500 text-white rounded-xl font-bold shadow-md shadow-sky-200">Simpan</button>
-                </div>
-             </div>
-          </div>
-        )}
-
-        {/* Modal AI Assistant */}
-        {isAIModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh]">
-              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-indigo-500 to-purple-500 rounded-t-3xl text-white">
-                <h3 className="font-bold text-lg flex items-center gap-2">
-                  <Sparkles size={20} className="text-yellow-300" /> Asisten Bisnis
-                </h3>
-                <button onClick={() => setIsAIModalOpen(false)} className="text-white/80 hover:text-white p-1"><X size={20}/></button>
-              </div>
-              
-              <div className="p-5 overflow-y-auto flex-1">
-                {aiLoading ? (
-                  <div className="flex flex-col items-center justify-center py-10 text-indigo-500">
-                    <Loader2 size={40} className="animate-spin mb-4" />
-                    <p className="text-sm font-semibold animate-pulse">✨ AI sedang menganalisis datamu...</p>
-                  </div>
-                ) : aiResponse ? (
-                  <div className="text-sm text-slate-700 space-y-3 whitespace-pre-wrap leading-relaxed">
-                    {/* Render response text roughly. Markdown parsing can be added later if needed, for now standard spacing works */}
-                    {aiResponse}
-                  </div>
-                ) : (
-                  <div className="text-center py-6 text-slate-500">
-                    <Sparkles size={48} className="mx-auto text-indigo-200 mb-4" />
-                    <p className="text-sm mb-6">Minta AI menganalisis omset, stok sisa, dan buatkan kata-kata promosi jualan hari ini!</p>
-                    <button 
-                      onClick={async () => {
-                        setAiLoading(true);
-                        setAiResponse('');
-                        
-                        const menuContext = menus.map(m => `- ${m.name}: Sisa ${m.stock} (Harga: Rp${m.price})`).join('\n');
-                        const toppingContext = toppings.map(t => `- ${t.name}: Sisa ${t.stock}`).join('\n');
-                        
-                        const prompt = `Analisis singkat data warung saya saat ini:
-                        Pemasukan: Rp${totalIncome}
-                        Pengeluaran: Rp${totalExpense}
-                        Keuntungan Bersih: Rp${netProfit}
-                        
-                        Stok Menu Utama:
-                        ${menuContext || 'Tidak ada data'}
-                        
-                        Stok Topping:
-                        ${toppingContext || 'Tidak ada data'}
-                        
-                        Berikan:
-                        1. Satu paragraf evaluasi singkat performa keuangan & saran stok menu apa yang perlu segera di-restock atau didorong penjualannya.
-                        2. Buatkan SATU draft caption Instagram/WhatsApp yang santai, kekinian, memancing interaksi, dan menyertakan menu yang masih tersedia. Gunakan emoji yang relevan.`;
-
-                        try {
-                          const res = await fetchGeminiWithRetry(prompt);
-                          setAiResponse(res);
-                        } catch (err) {
-                          setAiResponse("Maaf, terjadi kesalahan atau masalah koneksi saat memanggil AI. Silakan coba lagi.");
-                        } finally {
-                          setAiLoading(false);
-                        }
-                      }}
-                      className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-indigo-200 active:scale-95 transition-transform flex items-center justify-center gap-2"
-                    >
-                      <Sparkles size={18} /> Analisis Sekarang
-                    </button>
-                  </div>
-                )}
-              </div>
-              
-              {aiResponse && !aiLoading && (
-                <div className="p-4 border-t border-slate-100 bg-slate-50 rounded-b-3xl">
-                  <button 
-                    onClick={() => { setAiResponse(''); setIsAIModalOpen(false); }}
-                    className="w-full bg-slate-200 text-slate-700 font-bold py-3 rounded-xl hover:bg-slate-300 transition-colors"
-                  >
-                    Tutup
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Bottom Navigation Bar */}
-        <nav className="fixed bottom-0 w-full max-w-md bg-white border-t border-slate-100 pb-safe shadow-[0_-4px_20px_rgba(0,0,0,0.03)] z-40 rounded-t-3xl">
-          <div className="flex justify-around items-center p-2">
-            <button 
-              onClick={() => setActiveTab('home')} 
-              className={`flex flex-col items-center p-3 rounded-2xl w-16 transition-all ${activeTab === 'home' ? 'text-sky-500' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              <div className={`${activeTab === 'home' ? 'bg-sky-50 p-1.5 rounded-xl' : ''}`}><Home size={22} strokeWidth={activeTab === 'home' ? 2.5 : 2} /></div>
-              <span className="text-[10px] font-semibold mt-1">Beranda</span>
+        <!-- BOTTOM NAVIGATION -->
+        <nav class="fixed bottom-0 w-full max-w-md bg-white border-t border-slate-200 flex justify-around p-2 pb-5 z-20 rounded-t-2xl shadow-[0_-5px_15px_-10px_rgba(0,0,0,0.1)]">
+            <button onclick="switchTab('dashboard')" class="nav-btn text-blue-600 flex flex-col items-center w-16" data-target="dashboard">
+                <i class="ph-fill ph-squares-four text-2xl mb-1 transition-transform"></i>
+                <span class="text-[10px] font-semibold">Beranda</span>
             </button>
-            <button 
-              onClick={() => setActiveTab('menu')} 
-              className={`flex flex-col items-center p-3 rounded-2xl w-16 transition-all ${activeTab === 'menu' ? 'text-sky-500' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              <div className={`${activeTab === 'menu' ? 'bg-sky-50 p-1.5 rounded-xl' : ''}`}><BookOpen size={22} strokeWidth={activeTab === 'menu' ? 2.5 : 2} /></div>
-              <span className="text-[10px] font-semibold mt-1">Menu</span>
+            <button onclick="switchTab('pesanan')" class="nav-btn text-slate-400 hover:text-blue-500 flex flex-col items-center w-16" data-target="pesanan">
+                <i class="ph ph-receipt text-2xl mb-1 transition-transform"></i>
+                <span class="text-[10px] font-semibold">Pesanan</span>
             </button>
-            <button 
-              onClick={() => setActiveTab('order')} 
-              className={`flex flex-col items-center p-3 rounded-2xl w-16 transition-all ${activeTab === 'order' ? 'text-sky-500' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              <div className={`${activeTab === 'order' ? 'bg-sky-50 p-1.5 rounded-xl' : ''}`}><ShoppingBag size={22} strokeWidth={activeTab === 'order' ? 2.5 : 2} /></div>
-              <span className="text-[10px] font-semibold mt-1">Pesanan</span>
+            <button onclick="switchTab('menu')" class="nav-btn text-slate-400 hover:text-blue-500 flex flex-col items-center w-16" data-target="menu">
+                <i class="ph ph-list-dashes text-2xl mb-1 transition-transform"></i>
+                <span class="text-[10px] font-semibold">Menu</span>
             </button>
-            <button 
-              onClick={() => setActiveTab('expense')} 
-              className={`flex flex-col items-center p-3 rounded-2xl w-16 transition-all ${activeTab === 'expense' ? 'text-rose-500' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              <div className={`${activeTab === 'expense' ? 'bg-rose-50 p-1.5 rounded-xl' : ''}`}><DollarSign size={22} strokeWidth={activeTab === 'expense' ? 2.5 : 2} /></div>
-              <span className="text-[10px] font-semibold mt-1">Keluar</span>
+            <button onclick="switchTab('pengeluaran')" class="nav-btn text-slate-400 hover:text-blue-500 flex flex-col items-center w-16" data-target="pengeluaran">
+                <i class="ph ph-money text-2xl mb-1 transition-transform"></i>
+                <span class="text-[10px] font-semibold">Pengeluaran</span>
             </button>
-          </div>
         </nav>
+
+        <!-- ================= MODALS ================= -->
         
-      </div>
+        <!-- Backdrop Global -->
+        <div id="modal-backdrop" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-30 hidden transition-opacity" onclick="closeAllModals()"></div>
+
+        <!-- Modal Edit Modal Awal -->
+        <div id="modal-edit-modal" class="modal-content fixed bottom-0 left-1/2 transform -translate-x-1/2 w-full max-w-md bg-white rounded-t-3xl z-40 hidden shadow-2xl">
+            <div class="p-5">
+                <div class="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-4"></div>
+                <h3 class="text-lg font-bold mb-4">Atur Modal Awal</h3>
+                <div class="mb-4">
+                    <label class="block text-sm text-slate-500 mb-1">Nominal (Rp)</label>
+                    <input type="number" id="input-modal-awal" class="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 text-lg font-semibold text-slate-800" placeholder="Contoh: 251000">
+                </div>
+                <button onclick="saveModalAwal()" class="w-full bg-blue-500 text-white font-bold py-3 rounded-xl hover:bg-blue-600 active:scale-95 transition-all">Simpan Perubahan</button>
+            </div>
+        </div>
+
+        <!-- Modal Tambah/Edit Menu & Topping -->
+        <div id="modal-form-menu" class="modal-content fixed bottom-0 left-1/2 transform -translate-x-1/2 w-full max-w-md bg-white rounded-t-3xl z-40 hidden shadow-2xl max-h-[90vh] overflow-y-auto pb-10">
+            <div class="p-5">
+                <div class="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-4"></div>
+                <h3 id="title-form-menu" class="text-lg font-bold mb-4">Tambah Menu</h3>
+                <input type="hidden" id="input-menu-id">
+                <input type="hidden" id="input-menu-type"> <!-- 'menu' or 'topping' -->
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-slate-500 mb-1">Nama Item</label>
+                        <input type="text" id="input-menu-nama" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-blue-500 text-slate-800" placeholder="Misal: Piscok Lumer">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-500 mb-1">Harga (Rp)</label>
+                        <input type="number" id="input-menu-harga" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-blue-500 text-slate-800" placeholder="10000">
+                    </div>
+                    <div id="container-stok">
+                        <label class="block text-sm text-slate-500 mb-1">Stok Tersedia</label>
+                        <input type="number" id="input-menu-stok" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-blue-500 text-slate-800" placeholder="50">
+                        <p class="text-[10px] text-slate-400 mt-1">*Abaikan stok jika tipe adalah topping (topping dianggap tidak terbatas atau ikut stok utama)</p>
+                    </div>
+                </div>
+                <div class="flex gap-3 mt-6">
+                    <button onclick="closeAllModals()" class="flex-1 bg-slate-100 text-slate-600 font-bold py-3 rounded-xl hover:bg-slate-200 transition-colors">Batal</button>
+                    <button onclick="saveMenu()" class="flex-1 bg-blue-500 text-white font-bold py-3 rounded-xl hover:bg-blue-600 transition-colors shadow-md">Simpan</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal Tambah Pengeluaran -->
+        <div id="modal-tambah-pengeluaran" class="modal-content fixed bottom-0 left-1/2 transform -translate-x-1/2 w-full max-w-md bg-white rounded-t-3xl z-40 hidden shadow-2xl">
+            <div class="p-5">
+                <div class="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-4"></div>
+                <h3 class="text-lg font-bold mb-4">Catat Pengeluaran</h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-slate-500 mb-1">Keterangan / Nama Barang</label>
+                        <input type="text" id="input-peng-nama" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-red-400 text-slate-800" placeholder="Misal: Beli Plastik Kemasan">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-500 mb-1">Nominal (Rp)</label>
+                        <input type="number" id="input-peng-nominal" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-red-400 text-slate-800" placeholder="25000">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-slate-500 mb-1">Tanggal</label>
+                        <input type="date" id="input-peng-tanggal" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-none focus:border-red-400 text-slate-800">
+                    </div>
+                </div>
+                <button onclick="savePengeluaran()" class="w-full bg-red-500 text-white font-bold py-3 rounded-xl hover:bg-red-600 active:scale-95 transition-all shadow-md mt-6">Simpan Pengeluaran</button>
+            </div>
+        </div>
+
+        <!-- Modal Besar: Buat Pesanan -->
+        <div id="modal-tambah-pesanan" class="modal-content fixed inset-0 z-40 hidden flex-col justify-end">
+            <!-- Full screen background inside max-w-md -->
+            <div class="absolute inset-0 bg-white h-full w-full max-w-md mx-auto flex flex-col slide-up">
+                
+                <!-- Header Modal -->
+                <div class="p-4 bg-blue-500 text-white flex justify-between items-center shadow-md">
+                    <h3 class="font-bold text-lg">Buat Pesanan Baru</h3>
+                    <button onclick="closeAllModals()" class="text-white hover:bg-blue-600 p-1 rounded-full"><i class="ph ph-x text-2xl"></i></button>
+                </div>
+
+                <!-- Konten Scrollable -->
+                <div class="flex-1 overflow-y-auto p-4 bg-slate-50 pb-24">
+                    
+                    <!-- Data Pelanggan -->
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-4">
+                        <h4 class="font-semibold text-sm mb-3 text-slate-700 border-b pb-2">Informasi Umum</h4>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs text-slate-500 mb-1">Nama Pelanggan (Opsional)</label>
+                                <input type="text" id="form-pesanan-nama" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:border-blue-500" placeholder="Nama / Meja">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-slate-500 mb-1">Tanggal</label>
+                                <input type="date" id="form-pesanan-tanggal" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:border-blue-500">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Form Tambah Item -->
+                    <div class="bg-blue-50/50 p-4 rounded-2xl shadow-sm border border-blue-100 mb-4">
+                        <h4 class="font-semibold text-sm mb-3 text-blue-700 border-b border-blue-200 pb-2">Pilih Menu & Topping</h4>
+                        
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-xs text-slate-600 mb-1 font-medium">Menu Utama</label>
+                                <select id="form-item-menu" class="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm focus:outline-none focus:border-blue-500">
+                                    <!-- Diisi via JS -->
+                                </select>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-xs text-slate-600 mb-1 font-medium">Topping (Bisa pilih lebih dari satu)</label>
+                                <div id="form-item-toppings" class="grid grid-cols-2 gap-2">
+                                    <!-- Checkboxes diisi via JS -->
+                                </div>
+                            </div>
+
+                            <div class="flex gap-3 items-end">
+                                <div class="w-24">
+                                    <label class="block text-xs text-slate-600 mb-1 font-medium">Jumlah (Qty)</label>
+                                    <input type="number" id="form-item-qty" value="1" min="1" class="w-full bg-white border border-slate-300 rounded-lg p-2.5 text-sm focus:outline-none focus:border-blue-500 text-center">
+                                </div>
+                                <button onclick="tambahkanItemKeKeranjang()" class="flex-1 bg-blue-100 text-blue-700 font-bold py-2.5 rounded-lg hover:bg-blue-200 transition-colors text-sm">
+                                    + Tambah ke List
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- List Keranjang Sementara -->
+                    <div>
+                        <h4 class="font-semibold text-sm mb-2 text-slate-700 flex justify-between">
+                            Daftar Item 
+                            <span class="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full" id="badge-item-count">0</span>
+                        </h4>
+                        <div id="keranjang-list" class="flex flex-col gap-2 empty:hidden">
+                            <!-- Item keranjang via JS -->
+                        </div>
+                        <div id="keranjang-kosong" class="text-center py-6 bg-slate-100 border border-dashed border-slate-300 rounded-xl">
+                            <p class="text-xs text-slate-400">Belum ada item ditambahkan</p>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Footer Modal (Total & Save) -->
+                <div class="absolute bottom-0 w-full bg-white border-t border-slate-200 p-4 flex justify-between items-center z-10 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.1)]">
+                    <div>
+                        <p class="text-xs text-slate-500 font-medium mb-0.5">Total Tagihan</p>
+                        <p id="form-pesanan-grandtotal" class="text-xl font-bold text-blue-600">Rp 0</p>
+                    </div>
+                    <button onclick="simpanPesanan()" class="bg-blue-500 text-white px-6 py-3 rounded-xl font-bold shadow-md hover:bg-blue-600 active:scale-95 transition-all">
+                        Simpan Pesanan
+                    </button>
+                </div>
+            </div>
+        </div>
+
     </div>
-  );
-}
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        // --- 1. STATE MANAGEMENT (Penyimpanan Memori) ---
+        // Catatan: Karena berjalan murni di file HTML tunggal tanpa database eksternal, 
+        // data disimpan di memory saat ini. Merefresh halaman akan me-reset data.
+        let state = {
+            modalAwal: 251000,
+            menus: [
+                { id: 1, nama: 'Piscok Lumer', harga: 5000, stok: 50 },
+                { id: 2, nama: 'Roti Bakar', harga: 12000, stok: 20 },
+                { id: 3, nama: 'Es Teh Manis', harga: 4000, stok: 100 }
+            ],
+            toppings: [
+                { id: 1, nama: 'Oreo', harga: 2000 },
+                { id: 2, nama: 'Redvelvet', harga: 3000 },
+                { id: 3, nama: 'Tiramisu', harga: 2500 },
+                { id: 4, nama: 'Keju', harga: 2000 }
+            ],
+            pesanan: [],      // array object order
+            pengeluaran: []   // array object expense
+        };
+
+        // State sementara untuk form pesanan
+        let tempCart = [];
+
+        // --- 2. UTILITY FUNCTIONS ---
+        const formatRp = (angka) => {
+            return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+        };
+
+        const generateId = () => Math.random().toString(36).substr(2, 9);
+        
+        const getTodayDate = () => {
+            const today = new Date();
+            return today.toISOString().split('T')[0];
+        };
+
+        const showToast = (message, type = 'success') => {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bgColor = type === 'error' ? 'bg-red-500' : 'bg-slate-800';
+            toast.className = `${bgColor} text-white px-4 py-3 rounded-xl shadow-lg text-sm font-medium flex items-center justify-between transition-all duration-300 transform translate-y-4 opacity-0`;
+            toast.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i class="ph-fill ${type === 'error' ? 'ph-warning-circle' : 'ph-check-circle'} text-lg"></i>
+                    ${message}
+                </div>
+            `;
+            container.appendChild(toast);
+            
+            // Animate in
+            setTimeout(() => {
+                toast.classList.remove('translate-y-4', 'opacity-0');
+                toast.classList.add('translate-y-0', 'opacity-100');
+            }, 10);
+
+            // Animate out
+            setTimeout(() => {
+                toast.classList.remove('translate-y-0', 'opacity-100');
+                toast.classList.add('-translate-y-4', 'opacity-0');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        };
+
+        // --- 3. NAVIGATION & UI HANDLING ---
+        function switchTab(tabId) {
+            // Sembunyikan semua view
+            document.querySelectorAll('.view-section').forEach(el => {
+                el.classList.add('hidden');
+            });
+            // Tampilkan view yang dipilih
+            document.getElementById(`view-${tabId}`).classList.remove('hidden');
+
+            // Update Nav styling
+            document.querySelectorAll('.nav-btn').forEach(btn => {
+                const icon = btn.querySelector('i');
+                if (btn.dataset.target === tabId) {
+                    btn.classList.replace('text-slate-400', 'text-blue-600');
+                    if(icon.classList.contains('ph')) {
+                        icon.classList.replace('ph', 'ph-fill');
+                        icon.classList.add('-translate-y-1', 'scale-110');
+                    }
+                } else {
+                    btn.classList.replace('text-blue-600', 'text-slate-400');
+                    if(icon.classList.contains('ph-fill')) {
+                        icon.classList.replace('ph-fill', 'ph');
+                        icon.classList.remove('-translate-y-1', 'scale-110');
+                    }
+                }
+            });
+
+            // Re-render konten setiap kali tab dibuka untuk data terbaru
+            renderDashboard();
+            if(tabId === 'menu') renderMenuDanTopping();
+            if(tabId === 'pesanan') renderDaftarPesanan();
+            if(tabId === 'pengeluaran') renderDaftarPengeluaran();
+        }
+
+        function switchSubTab(type) {
+            const btnMenu = document.getElementById('tab-menu-utama');
+            const btnTopping = document.getElementById('tab-menu-topping');
+            const viewMenu = document.getElementById('subview-menu');
+            const viewTopping = document.getElementById('subview-topping');
+
+            if(type === 'menu') {
+                btnMenu.className = "flex-1 py-2 text-sm font-bold rounded-lg bg-white shadow-sm text-blue-600 transition-all";
+                btnTopping.className = "flex-1 py-2 text-sm font-bold rounded-lg text-slate-500 transition-all hover:bg-slate-200/50";
+                viewMenu.classList.remove('hidden');
+                viewTopping.classList.add('hidden');
+            } else {
+                btnTopping.className = "flex-1 py-2 text-sm font-bold rounded-lg bg-white shadow-sm text-blue-600 transition-all";
+                btnMenu.className = "flex-1 py-2 text-sm font-bold rounded-lg text-slate-500 transition-all hover:bg-slate-200/50";
+                viewTopping.classList.remove('hidden');
+                viewMenu.classList.add('hidden');
+            }
+        }
+
+        function openModal(modalId) {
+            document.getElementById('modal-backdrop').classList.remove('hidden');
+            const modal = document.getElementById(modalId);
+            modal.classList.remove('hidden');
+            
+            // Set default value Modal Awal
+            if(modalId === 'modal-edit-modal') {
+                document.getElementById('input-modal-awal').value = state.modalAwal;
+            }
+            // Set default date Pengeluaran
+            if(modalId === 'modal-tambah-pengeluaran') {
+                document.getElementById('input-peng-tanggal').value = getTodayDate();
+                document.getElementById('input-peng-nama').value = '';
+                document.getElementById('input-peng-nominal').value = '';
+            }
+        }
+
+        function closeAllModals() {
+            document.getElementById('modal-backdrop').classList.add('hidden');
+            document.querySelectorAll('.modal-content').forEach(el => {
+                el.classList.add('hidden');
+            });
+        }
+
+        // --- 4. RENDERER FUNCTIONS ---
+        
+        function renderDashboard() {
+            const totalPemasukan = state.pesanan.reduce((sum, p) => sum + p.totalHarga, 0);
+            const totalPengeluaran = state.pengeluaran.reduce((sum, p) => sum + Number(p.nominal), 0);
+            const keuntungan = totalPemasukan - totalPengeluaran;
+            const saldoAkhir = Number(state.modalAwal) + keuntungan;
+
+            document.getElementById('txt-modal-awal').textContent = formatRp(state.modalAwal);
+            document.getElementById('txt-pemasukan').textContent = formatRp(totalPemasukan);
+            document.getElementById('txt-pengeluaran').textContent = formatRp(totalPengeluaran);
+            document.getElementById('txt-keuntungan').textContent = formatRp(keuntungan);
+            document.getElementById('txt-saldo-akhir').textContent = formatRp(saldoAkhir);
+            
+            // Warna dinamis untuk keuntungan
+            const keunEl = document.getElementById('txt-keuntungan');
+            if(keuntungan < 0) {
+                keunEl.classList.replace('text-emerald-700', 'text-red-600');
+                keunEl.parentElement.classList.replace('bg-emerald-50', 'bg-red-50');
+                keunEl.parentElement.classList.replace('border-emerald-100', 'border-red-100');
+            } else {
+                keunEl.classList.replace('text-red-600', 'text-emerald-700');
+                keunEl.parentElement.classList.replace('bg-red-50', 'bg-emerald-50');
+                keunEl.parentElement.classList.replace('border-red-100', 'border-emerald-100');
+            }
+        }
+
+        function renderMenuDanTopping() {
+            // Render Menu Utama
+            const listMenu = document.getElementById('list-menu');
+            listMenu.innerHTML = '';
+            if(state.menus.length === 0) listMenu.innerHTML = '<p class="text-center text-sm text-slate-400 py-4">Belum ada menu. Silakan tambah.</p>';
+            
+            state.menus.forEach(m => {
+                listMenu.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center">
+                        <div>
+                            <h4 class="font-bold text-slate-800">${m.nama}</h4>
+                            <p class="text-blue-600 font-semibold text-sm">${formatRp(m.harga)}</p>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="text-center px-3 py-1 bg-slate-50 rounded-lg border border-slate-200">
+                                <p class="text-[10px] text-slate-400 uppercase tracking-wide">Sisa Stok</p>
+                                <p class="font-bold ${m.stok > 5 ? 'text-slate-700' : 'text-red-500'}">${m.stok}</p>
+                            </div>
+                            <button onclick="editMenu(${m.id}, 'menu')" class="w-8 h-8 flex items-center justify-center bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100">
+                                <i class="ph ph-pencil-simple text-lg"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+
+            // Render Topping
+            const listTopping = document.getElementById('list-topping');
+            listTopping.innerHTML = '';
+            if(state.toppings.length === 0) listTopping.innerHTML = '<p class="text-center text-sm text-slate-400 py-4">Belum ada topping. Silakan tambah.</p>';
+
+            state.toppings.forEach(t => {
+                listTopping.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center">
+                        <div>
+                            <h4 class="font-bold text-slate-800">${t.nama}</h4>
+                            <p class="text-blue-600 font-semibold text-sm">+ ${formatRp(t.harga)}</p>
+                        </div>
+                        <button onclick="editMenu(${t.id}, 'topping')" class="w-8 h-8 flex items-center justify-center bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100">
+                            <i class="ph ph-pencil-simple text-lg"></i>
+                        </button>
+                    </div>
+                `;
+            });
+        }
+
+        function renderDaftarPengeluaran() {
+            const list = document.getElementById('list-pengeluaran');
+            list.innerHTML = '';
+            
+            // Urutkan terbaru
+            const sorted = [...state.pengeluaran].sort((a,b) => new Date(b.tanggal) - new Date(a.tanggal));
+            
+            if(sorted.length === 0) {
+                list.innerHTML = `<div class="text-center py-10"><i class="ph ph-receipt text-4xl text-slate-300 mb-2"></i><p class="text-sm text-slate-400">Belum ada catatan pengeluaran.</p></div>`;
+                return;
+            }
+
+            sorted.forEach(p => {
+                // Format Date ke indo
+                const tgl = new Date(p.tanggal).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+                list.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex justify-between items-center">
+                        <div class="flex gap-3 items-center">
+                            <div class="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
+                                <i class="ph ph-money text-xl"></i>
+                            </div>
+                            <div>
+                                <h4 class="font-bold text-slate-800 text-sm">${p.nama}</h4>
+                                <p class="text-[11px] text-slate-400 font-medium">${tgl}</p>
+                            </div>
+                        </div>
+                        <p class="text-red-500 font-bold text-sm">- ${formatRp(p.nominal)}</p>
+                    </div>
+                `;
+            });
+        }
+
+        function renderDaftarPesanan() {
+            const list = document.getElementById('list-pesanan');
+            list.innerHTML = '';
+            
+            const sorted = [...state.pesanan].sort((a,b) => new Date(b.tanggal) - new Date(a.tanggal));
+
+            if(sorted.length === 0) {
+                list.innerHTML = `<div class="text-center py-10"><i class="ph ph-bag text-4xl text-slate-300 mb-2"></i><p class="text-sm text-slate-400">Belum ada pesanan masuk.</p></div>`;
+                return;
+            }
+
+            sorted.forEach(p => {
+                const tgl = new Date(p.tanggal).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute:'2-digit' });
+                
+                // Construct items summary
+                let itemsHTML = p.items.map(i => {
+                    let toppingStr = i.toppings.length > 0 ? `<span class="text-[10px] text-slate-400 italic break-words">+ ${i.toppings.map(t=>t.nama).join(', ')}</span>` : '';
+                    return `<li class="text-xs text-slate-600 list-disc ml-4 mb-0.5"><span class="font-semibold">${i.qty}x</span> ${i.menuNama} ${toppingStr}</li>`;
+                }).join('');
+
+                list.innerHTML += `
+                    <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 mb-2 relative overflow-hidden">
+                        <div class="absolute top-0 right-0 w-2 h-full bg-blue-500"></div>
+                        <div class="flex justify-between items-start mb-2 border-b border-slate-50 pb-2">
+                            <div>
+                                <h4 class="font-bold text-slate-800 text-sm">${p.namaPelanggan || 'Pelanggan Anonim'}</h4>
+                                <p class="text-[10px] text-slate-400 font-medium">${tgl}</p>
+                            </div>
+                            <p class="text-blue-600 font-bold text-sm">${formatRp(p.totalHarga)}</p>
+                        </div>
+                        <ul class="mb-3">
+                            ${itemsHTML}
+                        </ul>
+                        <div class="flex justify-end">
+                             <button onclick="hapusPesanan('${p.id}')" class="text-xs text-red-500 hover:text-red-700 flex items-center gap-1 bg-red-50 px-2 py-1 rounded-lg">
+                                 <i class="ph ph-trash"></i> Hapus Pesanan
+                             </button>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+
+        // --- 5. LOGIC ACTIONS ---
+
+        function saveModalAwal() {
+            const inputVal = document.getElementById('input-modal-awal').value;
+            if(!inputVal || inputVal < 0) {
+                showToast('Nominal tidak valid!', 'error');
+                return;
+            }
+            state.modalAwal = Number(inputVal);
+            renderDashboard();
+            closeAllModals();
+            showToast('Modal awal berhasil diubah');
+        }
+
+        // Form Menu / Topping Handler
+        function setFormMenuType(type) {
+            document.getElementById('input-menu-type').value = type;
+            document.getElementById('input-menu-id').value = ''; // mode tambah
+            document.getElementById('input-menu-nama').value = '';
+            document.getElementById('input-menu-harga').value = '';
+            
+            if(type === 'menu') {
+                document.getElementById('title-form-menu').textContent = 'Tambah Menu Baru';
+                document.getElementById('container-stok').style.display = 'block';
+                document.getElementById('input-menu-stok').value = '10'; // default
+            } else {
+                document.getElementById('title-form-menu').textContent = 'Tambah Topping Baru';
+                document.getElementById('container-stok').style.display = 'none';
+            }
+        }
+
+        function editMenu(id, type) {
+            let item;
+            if(type === 'menu') {
+                item = state.menus.find(m => m.id === id);
+                document.getElementById('container-stok').style.display = 'block';
+                document.getElementById('input-menu-stok').value = item.stok;
+                document.getElementById('title-form-menu').textContent = 'Edit Menu';
+            } else {
+                item = state.toppings.find(t => t.id === id);
+                document.getElementById('container-stok').style.display = 'none';
+                document.getElementById('title-form-menu').textContent = 'Edit Topping';
+            }
+            
+            document.getElementById('input-menu-type').value = type;
+            document.getElementById('input-menu-id').value = id;
+            document.getElementById('input-menu-nama').value = item.nama;
+            document.getElementById('input-menu-harga').value = item.harga;
+            
+            openModal('modal-form-menu');
+        }
+
+        function saveMenu() {
+            const type = document.getElementById('input-menu-type').value;
+            const id = document.getElementById('input-menu-id').value;
+            const nama = document.getElementById('input-menu-nama').value;
+            const harga = Number(document.getElementById('input-menu-harga').value);
+            const stok = Number(document.getElementById('input-menu-stok').value);
+
+            if(!nama || !harga) {
+                showToast('Nama dan harga harus diisi!', 'error'); return;
+            }
+
+            if(id) { // Mode Edit
+                if(type === 'menu') {
+                    const idx = state.menus.findIndex(m => m.id == id);
+                    state.menus[idx] = { ...state.menus[idx], nama, harga, stok };
+                } else {
+                    const idx = state.toppings.findIndex(t => t.id == id);
+                    state.toppings[idx] = { ...state.toppings[idx], nama, harga };
+                }
+                showToast(`${type === 'menu'?'Menu':'Topping'} berhasil diperbarui`);
+            } else { // Mode Tambah
+                const newId = new Date().getTime(); // simple uniq id
+                if(type === 'menu') {
+                    state.menus.push({ id: newId, nama, harga, stok });
+                } else {
+                    state.toppings.push({ id: newId, nama, harga });
+                }
+                showToast(`${type === 'menu'?'Menu':'Topping'} berhasil ditambahkan`);
+            }
+
+            renderMenuDanTopping();
+            closeAllModals();
+        }
+
+        function savePengeluaran() {
+            const nama = document.getElementById('input-peng-nama').value;
+            const nominal = document.getElementById('input-peng-nominal').value;
+            const tanggal = document.getElementById('input-peng-tanggal').value;
+
+            if(!nama || !nominal || !tanggal) {
+                showToast('Semua field pengeluaran harus diisi!', 'error'); return;
+            }
+
+            state.pengeluaran.push({
+                id: generateId(),
+                nama,
+                nominal: Number(nominal),
+                tanggal
+            });
+
+            showToast('Pengeluaran berhasil dicatat');
+            renderDaftarPengeluaran();
+            renderDashboard();
+            closeAllModals();
+        }
+
+
+        // --- 6. LOGIC PESANAN (KOMPLEKS) ---
+
+        function initFormPesanan() {
+            tempCart = [];
+            document.getElementById('form-pesanan-nama').value = '';
+            document.getElementById('form-pesanan-tanggal').value = getTodayDate();
+            document.getElementById('form-item-qty').value = 1;
+            
+            // Populate Dropdown Menu
+            const selectMenu = document.getElementById('form-item-menu');
+            selectMenu.innerHTML = '';
+            state.menus.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = `${m.nama} (${formatRp(m.harga)}) - Stok: ${m.stok}`;
+                if(m.stok <= 0) opt.disabled = true;
+                selectMenu.appendChild(opt);
+            });
+
+            // Populate Checkbox Topping
+            const containerTopping = document.getElementById('form-item-toppings');
+            containerTopping.innerHTML = '';
+            state.toppings.forEach(t => {
+                containerTopping.innerHTML += `
+                    <label class="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:bg-slate-50 transition-colors">
+                        <input type="checkbox" value="${t.id}" class="check-topping w-4 h-4 text-blue-600 rounded focus:ring-blue-500">
+                        <div class="flex flex-col">
+                            <span class="text-xs font-semibold text-slate-700">${t.nama}</span>
+                            <span class="text-[10px] text-blue-500">+${formatRp(t.harga)}</span>
+                        </div>
+                    </label>
+                `;
+            });
+
+            renderKeranjang();
+        }
+
+        function tambahkanItemKeKeranjang() {
+            const menuId = document.getElementById('form-item-menu').value;
+            const qty = Number(document.getElementById('form-item-qty').value);
+            
+            if(!menuId || qty < 1) {
+                showToast('Pilih menu dan pastikan jumlah minimal 1', 'error'); return;
+            }
+
+            // Cari data menu
+            const menu = state.menus.find(m => m.id == menuId);
+            
+            // Cek stok sementara (termasuk yang sudah di keranjang)
+            const qtyInCart = tempCart.filter(item => item.menuId == menuId).reduce((sum, item) => sum + item.qty, 0);
+            if((qtyInCart + qty) > menu.stok) {
+                showToast(`Stok ${menu.nama} tidak cukup! (Sisa: ${menu.stok - qtyInCart})`, 'error'); return;
+            }
+
+            // Kumpulkan Topping
+            const toppingCheckboxes = document.querySelectorAll('.check-topping:checked');
+            let selectedToppings = [];
+            let totalHargaTopping = 0;
+
+            toppingCheckboxes.forEach(cb => {
+                const t = state.toppings.find(top => top.id == cb.value);
+                selectedToppings.push({ id: t.id, nama: t.nama, harga: t.harga });
+                totalHargaTopping += t.harga;
+            });
+
+            const subtotal = (menu.harga + totalHargaTopping) * qty;
+
+            const cartItem = {
+                id: generateId(),
+                menuId: menu.id,
+                menuNama: menu.nama,
+                menuHarga: menu.harga,
+                toppings: selectedToppings,
+                qty: qty,
+                subtotal: subtotal
+            };
+
+            tempCart.push(cartItem);
+            
+            // Reset input form kecil
+            document.querySelectorAll('.check-topping').forEach(cb => cb.checked = false);
+            document.getElementById('form-item-qty').value = 1;
+            
+            showToast('Item ditambahkan ke daftar');
+            renderKeranjang();
+        }
+
+        function hapusItemKeranjang(itemId) {
+            tempCart = tempCart.filter(item => item.id !== itemId);
+            renderKeranjang();
+        }
+
+        function renderKeranjang() {
+            const list = document.getElementById('keranjang-list');
+            const placeholder = document.getElementById('keranjang-kosong');
+            const badge = document.getElementById('badge-item-count');
+            const grandTotalEl = document.getElementById('form-pesanan-grandtotal');
+
+            badge.textContent = tempCart.length;
+
+            if(tempCart.length === 0) {
+                list.innerHTML = '';
+                placeholder.style.display = 'block';
+                grandTotalEl.textContent = 'Rp 0';
+                return;
+            }
+
+            placeholder.style.display = 'none';
+            list.innerHTML = '';
+            
+            let grandTotal = 0;
+
+            tempCart.forEach(item => {
+                grandTotal += item.subtotal;
+                let topStr = item.toppings.length > 0 
+                    ? `<p class="text-[10px] text-slate-500 mb-1">Topping: ${item.toppings.map(t=>t.nama).join(', ')}</p>` 
+                    : '';
+                
+                list.innerHTML += `
+                    <div class="bg-white p-3 rounded-xl border border-slate-200 flex justify-between items-center shadow-sm">
+                        <div class="flex-1">
+                            <h5 class="font-bold text-sm text-slate-800">${item.menuNama} <span class="text-blue-500 ml-1">x${item.qty}</span></h5>
+                            ${topStr}
+                            <p class="text-xs font-semibold text-slate-700">${formatRp(item.subtotal)}</p>
+                        </div>
+                        <button onclick="hapusItemKeranjang('${item.id}')" class="w-8 h-8 rounded-full bg-red-50 text-red-500 flex items-center justify-center hover:bg-red-100 ml-2">
+                            <i class="ph ph-trash"></i>
+                        </button>
+                    </div>
+                `;
+            });
+
+            grandTotalEl.textContent = formatRp(grandTotal);
+        }
+
+        function simpanPesanan() {
+            if(tempCart.length === 0) {
+                showToast('Daftar item masih kosong!', 'error'); return;
+            }
+
+            const namaPelanggan = document.getElementById('form-pesanan-nama').value;
+            const tanggal = document.getElementById('form-pesanan-tanggal').value;
+            
+            // Fix datetime untuk pesanan (gabung tanggal dengan waktu sekarang agar tersortir rapi)
+            const now = new Date();
+            const dateStr = tanggal ? `${tanggal}T${now.toTimeString().split(' ')[0]}` : now.toISOString();
+
+            let grandTotal = tempCart.reduce((sum, item) => sum + item.subtotal, 0);
+
+            // Simpan Data
+            const pesananBaru = {
+                id: generateId(),
+                namaPelanggan: namaPelanggan || 'Guest',
+                tanggal: dateStr,
+                items: tempCart,
+                totalHarga: grandTotal
+            };
+            
+            state.pesanan.push(pesananBaru);
+
+            // Kurangi Stok Asli di state.menus
+            tempCart.forEach(cartItem => {
+                const idx = state.menus.findIndex(m => m.id == cartItem.menuId);
+                if(idx !== -1) {
+                    state.menus[idx].stok -= cartItem.qty;
+                }
+            });
+
+            showToast('Pesanan berhasil disimpan!');
+            closeAllModals();
+            
+            // Pindah ke tab pesanan
+            switchTab('pesanan');
+            renderDaftarPesanan();
+        }
+
+        function hapusPesanan(idPesanan) {
+            if(confirm('Yakin ingin menghapus pesanan ini? Stok akan dikembalikan.')) {
+                const pesananIndex = state.pesanan.findIndex(p => p.id === idPesanan);
+                if(pesananIndex === -1) return;
+
+                const pesanan = state.pesanan[pesananIndex];
+                
+                // Kembalikan stok
+                pesanan.items.forEach(cartItem => {
+                    const menuIdx = state.menus.findIndex(m => m.id == cartItem.menuId);
+                    if(menuIdx !== -1) {
+                        state.menus[menuIdx].stok += cartItem.qty;
+                    }
+                });
+
+                // Hapus dari array
+                state.pesanan.splice(pesananIndex, 1);
+                showToast('Pesanan dibatalkan, stok dikembalikan.');
+                renderDaftarPesanan();
+                renderDashboard(); // Update dashboard uang
+            }
+        }
+
+        // --- INIT SAAT HALAMAN DIMUAT ---
+        document.addEventListener("DOMContentLoaded", () => {
+            switchTab('dashboard'); // Default view
+        });
+
+    </script>
+</body>
+</html>
